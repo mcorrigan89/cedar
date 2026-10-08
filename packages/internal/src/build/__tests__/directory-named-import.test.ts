@@ -112,12 +112,98 @@ describe('applyDirectoryNamedImport', () => {
     )
   })
 
-  it('handles large files with many quote-free exports quickly', () => {
-    const typeBlocks = Array.from(
-      { length: 20_000 },
-      (_, i) => `export type T${i} = {\n  id: number\n  count: number\n}\n`,
-    ).join('\n')
-    const code = `${typeBlocks}\nexport type { Thing } from 'some-package'`
+  it('leaves a bare `./` import of the current directory alone', () => {
+    // indexModule/ has an index file, so a rewrite would be possible here
+    const importer = path.join(path.dirname(FIXTURE_FILE), 'indexModule/x.ts')
+    const code = `import { ImpModule } from './'`
+    expect(applyDirectoryNamedImport(code, importer)).toBe(code)
+  })
+
+  it('rewrites an import with a block comment containing parentheses', () => {
+    const code = `import { ImpModule } /* load() */ from './Module'`
+    expect(applyDirectoryNamedImport(code, FIXTURE_FILE)).toBe(
+      `import { ImpModule } /* load() */ from './Module/Module'`,
+    )
+  })
+
+  it('rewrites a re-export with a block comment containing `=`', () => {
+    const code = `export { ExpModule } /* = */ from './Module'`
+    expect(applyDirectoryNamedImport(code, FIXTURE_FILE)).toBe(
+      `export { ExpModule } /* = */ from './Module/Module'`,
+    )
+  })
+
+  it('rewrites a multiline import with a line comment containing `=`', () => {
+    const code = `import {\n  ImpModule, // see a=b\n  AnotherThing,\n} from './Module'`
+    expect(applyDirectoryNamedImport(code, FIXTURE_FILE)).toBe(
+      `import {\n  ImpModule, // see a=b\n  AnotherThing,\n} from './Module/Module'`,
+    )
+  })
+
+  it('rewrites a default import combined with named imports', () => {
+    const code = `import Def, { ImpModule, type ImpType } from './Module'`
+    expect(applyDirectoryNamedImport(code, FIXTURE_FILE)).toBe(
+      `import Def, { ImpModule, type ImpType } from './Module/Module'`,
+    )
+  })
+
+  it('rewrites a default import combined with a namespace import', () => {
+    const code = `import Def, * as ns from './Module'`
+    expect(applyDirectoryNamedImport(code, FIXTURE_FILE)).toBe(
+      `import Def, * as ns from './Module/Module'`,
+    )
+  })
+
+  it('rewrites a type-only default import', () => {
+    const code = `import type Def from './Module'`
+    expect(applyDirectoryNamedImport(code, FIXTURE_FILE)).toBe(
+      `import type Def from './Module/Module'`,
+    )
+  })
+
+  it('rewrites an `export type *` re-export', () => {
+    const code = `export type * from './Module'`
+    expect(applyDirectoryNamedImport(code, FIXTURE_FILE)).toBe(
+      `export type * from './Module/Module'`,
+    )
+  })
+
+  it('rewrites a re-export of a default export', () => {
+    const code = `export { default as ExpModule } from './Module'`
+    expect(applyDirectoryNamedImport(code, FIXTURE_FILE)).toBe(
+      `export { default as ExpModule } from './Module/Module'`,
+    )
+  })
+
+  it('rewrites a re-export that follows an exported enum', () => {
+    const code = `export enum Color {\n  Red,\n  Green,\n}\n\nexport { ExpModule } from './Module'`
+    expect(applyDirectoryNamedImport(code, FIXTURE_FILE)).toBe(
+      `export enum Color {\n  Red,\n  Green,\n}\n\nexport { ExpModule } from './Module/Module'`,
+    )
+  })
+
+  // Each block is an `export` statement with no source string. Large
+  // generated files are mostly statements like these, and processing time
+  // must grow linearly with their number.
+  it.each([
+    [
+      'type aliases',
+      (i: number) =>
+        `export type T${i} = {\n  id: number\n  count: number\n}\n`,
+    ],
+    [
+      'interfaces',
+      (i: number) =>
+        `export interface T${i} {\n  id: number\n  count: number\n}\n`,
+    ],
+    ['enums', (i: number) => `export enum E${i} {\n  A,\n  B,\n}\n`],
+    [
+      'local export lists',
+      (i: number) => `const v${i} = 1\nexport { v${i} }\n`,
+    ],
+  ])('handles large files of quote-free exported %s quickly', (_, block) => {
+    const blocks = Array.from({ length: 20_000 }, (_, i) => block(i)).join('\n')
+    const code = `${blocks}\nexport type { Thing } from 'some-package'`
 
     const start = performance.now()
     const result = applyDirectoryNamedImport(code, FIXTURE_FILE)
